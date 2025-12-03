@@ -2,18 +2,25 @@ import React, { useState } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import ReportDisplay from './components/ReportDisplay';
-import { AppMode, Message, AssessmentData } from './types';
+import { AppMode, Message, AssessmentData, ApiConfig } from './types';
 import { sendAssessmentMessage, generateAssessmentReport, sendCounselingMessage } from './services/geminiService';
-import { Sparkles, Settings, X, Save } from 'lucide-react';
+import { Sparkles, Settings, X, Save, Key, Server, Cpu } from 'lucide-react';
 
 export default function App() {
   const [currentMode, setCurrentMode] = useState<AppMode>(AppMode.ASSESSMENT);
   
   // Custom Agent Names
-  const [agent1Name, setAgent1Name] = useState("心语"); // Heart Whisper / Intimate talk
-  const [agent2Name, setAgent2Name] = useState("蓝盾"); // Blue Shield / Police Protection
+  const [agent1Name, setAgent1Name] = useState("心语");
+  const [agent2Name, setAgent2Name] = useState("蓝盾");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
+  // API Configuration
+  const [apiConfig, setApiConfig] = useState<ApiConfig>({
+    provider: 'gemini',
+    apiKey: '',
+    model: ''
+  });
+
   // Assessment State (Agent 1)
   const [assessmentMessages, setAssessmentMessages] = useState<Message[]>([
     {
@@ -44,8 +51,8 @@ export default function App() {
     setRecordCount(prev => prev + 1);
     setIsAssessmentTyping(true);
 
-    // Call API
-    const responseText = await sendAssessmentMessage(newHistory, text, agent1Name);
+    // Call API with config
+    const responseText = await sendAssessmentMessage(newHistory, text, agent1Name, apiConfig);
 
     // Add bot message
     setAssessmentMessages(prev => [...prev, {
@@ -59,7 +66,7 @@ export default function App() {
 
   const handleGenerateReport = async () => {
     setIsGeneratingReport(true);
-    const data = await generateAssessmentReport(assessmentMessages);
+    const data = await generateAssessmentReport(assessmentMessages, apiConfig);
     
     if (data) {
       setReportData(data);
@@ -94,7 +101,8 @@ export default function App() {
        text, 
        reportData, 
        uploadedContext,
-       agent2Name
+       agent2Name,
+       apiConfig
      );
 
      setCounselingMessages(prev => [...prev, {
@@ -148,7 +156,7 @@ export default function App() {
              <button 
                onClick={() => setIsSettingsOpen(true)}
                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-               title="设置智能体名称"
+               title="设置 (API & 智能体名称)"
              >
                <Settings size={20} />
              </button>
@@ -218,47 +226,121 @@ export default function App() {
       {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 animate-in fade-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-slate-800">系统设置</h3>
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <Settings size={22} className="text-slate-500"/>
+                系统设置
+              </h3>
               <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={24} />
               </button>
             </div>
             
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">评估智能体名称</label>
-                <input 
-                  type="text" 
-                  value={agent1Name}
-                  onChange={(e) => setAgent1Name(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  placeholder="例如：心语"
-                />
-                <p className="text-xs text-slate-500 mt-1">负责通过自然对话收集信息的助手</p>
+            <div className="space-y-8">
+              {/* Agent Names Section */}
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 pb-2">
+                  智能体个性化
+                </h4>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">评估智能体名称</label>
+                  <input 
+                    type="text" 
+                    value={agent1Name}
+                    onChange={(e) => setAgent1Name(e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    placeholder="例如：心语"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">疏导智能体名称</label>
+                  <input 
+                    type="text" 
+                    value={agent2Name}
+                    onChange={(e) => setAgent2Name(e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    placeholder="例如：蓝盾"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">疏导智能体名称</label>
-                <input 
-                  type="text" 
-                  value={agent2Name}
-                  onChange={(e) => setAgent2Name(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  placeholder="例如：蓝盾"
-                />
-                <p className="text-xs text-slate-500 mt-1">负责基于报告提供专业咨询的专家</p>
+              {/* API Settings Section */}
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center gap-2">
+                  <Server size={14} /> 模型服务配置
+                </h4>
+                
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">服务提供商</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => setApiConfig({...apiConfig, provider: 'gemini'})}
+                      className={`py-2 px-4 rounded-lg text-sm font-medium border transition-all ${
+                        apiConfig.provider === 'gemini' 
+                          ? 'bg-blue-50 border-blue-500 text-blue-700' 
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      Google Gemini
+                    </button>
+                    <button 
+                      onClick={() => setApiConfig({...apiConfig, provider: 'openrouter'})}
+                      className={`py-2 px-4 rounded-lg text-sm font-medium border transition-all ${
+                        apiConfig.provider === 'openrouter' 
+                          ? 'bg-purple-50 border-purple-500 text-purple-700' 
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      OpenRouter / OpenAI
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-1">
+                    <Key size={14} /> API Key
+                  </label>
+                  <input 
+                    type="password" 
+                    value={apiConfig.apiKey}
+                    onChange={(e) => setApiConfig({...apiConfig, apiKey: e.target.value})}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all font-mono text-sm"
+                    placeholder={apiConfig.provider === 'gemini' ? "默认使用系统预设 Key (可留空)" : "sk-or-..."}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {apiConfig.provider === 'gemini' 
+                      ? "留空将使用默认的环境变量 Key。" 
+                      : "必须输入 OpenRouter API Key 才能使用第三方服务。"}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-1">
+                    <Cpu size={14} /> 自定义模型名称
+                  </label>
+                  <input 
+                    type="text" 
+                    value={apiConfig.model}
+                    onChange={(e) => setApiConfig({...apiConfig, model: e.target.value})}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all font-mono text-sm"
+                    placeholder={apiConfig.provider === 'gemini' ? "默认: gemini-2.5-flash" : "默认: google/gemini-2.0-flash-001"}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    如需使用特定版本的模型，请在此输入完整 ID (例如: anthropic/claude-3-opus)。
+                  </p>
+                </div>
               </div>
             </div>
 
-            <div className="mt-8 flex justify-end">
+            <div className="mt-8 flex justify-end pt-4 border-t border-slate-100">
               <button 
                 onClick={() => setIsSettingsOpen(false)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors"
+                className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-lg shadow-slate-900/20"
               >
                 <Save size={18} />
-                保存设置
+                保存并关闭
               </button>
             </div>
           </div>

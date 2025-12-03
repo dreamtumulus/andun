@@ -1,31 +1,66 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
-import { Message, AssessmentData } from "../types";
+import { Message, AssessmentData, ApiConfig } from "../types";
 
-const apiKey = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
+// Helper to get effective config
+const getEffectiveConfig = (config: ApiConfig) => {
+  return {
+    apiKey: config.apiKey || process.env.API_KEY || '',
+    model: config.model || (config.provider === 'openrouter' ? 'google/gemini-2.0-flash-001' : 'gemini-2.5-flash'),
+    provider: config.provider
+  };
+};
 
-// Configuration shared across models
-const safetySettings = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
-];
+/**
+ * OpenRouter / OpenAI-compatible Fetch Helper
+ */
+const callOpenRouter = async (
+  messages: { role: string; content: string }[],
+  model: string,
+  apiKey: string,
+  temperature: number,
+  jsonMode: boolean = false
+): Promise<string> => {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.href, // OpenRouter requirement
+        "X-Title": "Police Psychological Assessment System"
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        response_format: jsonMode ? { type: "json_object" } : undefined
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error("OpenRouter Error:", err);
+      throw new Error(`OpenRouter API Error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
+  } catch (error) {
+    console.error("Call OpenRouter Failed", error);
+    throw error;
+  }
+};
 
 /**
  * Agent 1: Assessment Agent
- * Conducts natural conversation to gather psychological data.
  */
 export const sendAssessmentMessage = async (
   history: Message[],
   newMessage: string,
-  agentName: string
+  agentName: string,
+  config: ApiConfig
 ): Promise<string> => {
-  const model = "gemini-2.5-flash"; 
+  const { apiKey, model, provider } = getEffectiveConfig(config);
   
   const systemInstruction = `
     你叫“${agentName}”，是警务安盾系统中的专业心理评估助手。
@@ -41,20 +76,39 @@ export const sendAssessmentMessage = async (
   `;
 
   try {
-    const chat = ai.chats.create({
-      model,
-      config: {
-        systemInstruction,
-        temperature: 0.5, // Focused setting for assessment
-      },
-      history: history.filter(h => h.role !== 'system').map(h => ({
-        role: h.role === 'model' ? 'model' : 'user',
-        parts: [{ text: h.text }],
-      })),
-    });
+    // --- GEMINI PROVIDER ---
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey });
+      const chat = ai.chats.create({
+        model,
+        config: {
+          systemInstruction,
+          temperature: 0.5,
+        },
+        history: history.filter(h => h.role !== 'system').map(h => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: h.text }],
+        })),
+      });
 
-    const result = await chat.sendMessage({ message: newMessage });
-    return result.text;
+      const result = await chat.sendMessage({ message: newMessage });
+      return result.text || "";
+    } 
+    
+    // --- OPENROUTER PROVIDER ---
+    else {
+      const messages = [
+        { role: 'system', content: systemInstruction },
+        ...history.filter(h => h.role !== 'system').map(h => ({
+          role: h.role === 'model' ? 'assistant' : 'user', // Map 'model' -> 'assistant'
+          content: h.text
+        })),
+        { role: 'user', content: newMessage }
+      ];
+      
+      return await callOpenRouter(messages, model, apiKey, 0.5);
+    }
+
   } catch (error) {
     console.error("Assessment Chat Error:", error);
     return "系统连接稍微有点不稳定，我们刚才聊到哪了？";
@@ -63,11 +117,13 @@ export const sendAssessmentMessage = async (
 
 /**
  * Generate Assessment Report
- * Analyzes the chat history to create a structured JSON profile.
  */
-export const generateAssessmentReport = async (history: Message[]): Promise<AssessmentData | null> => {
-  const model = "gemini-2.5-flash"; // Flash is good for structured extraction
-  
+export const generateAssessmentReport = async (
+  history: Message[], 
+  config: ApiConfig
+): Promise<AssessmentData | null> => {
+  const { apiKey, model, provider } = getEffectiveConfig(config);
+
   const conversationText = history
     .filter(h => h.role !== 'system')
     .map(h => `${h.role === 'user' ? '警员' : '评估助手'}: ${h.text}`)
@@ -75,7 +131,7 @@ export const generateAssessmentReport = async (history: Message[]): Promise<Asse
 
   const prompt = `
     作为资深警务心理学家，请根据以下对话记录，生成一份专业的《警务人员心理健康评估报告》。
-    请严格按照 JSON 格式输出，不要包含 Markdown 格式标记。
+    请严格按照 JSON 格式输出，不要包含 Markdown 格式标记（如 \`\`\`json ... \`\`\`）。
     
     【对话记录】：
     ${conversationText}
@@ -109,20 +165,38 @@ export const generateAssessmentReport = async (history: Message[]): Promise<Asse
   `;
 
   try {
-    const result = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.3, 
-      }
-    });
+    let text = "";
 
-    const text = result.text;
-    if (!text) return null;
+    // --- GEMINI PROVIDER ---
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey });
+      const result = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.3, 
+        }
+      });
+      text = result.text || "";
+    } 
     
-    // Parse JSON
-    return JSON.parse(text) as AssessmentData;
+    // --- OPENROUTER PROVIDER ---
+    else {
+      // Force JSON in system message for stronger adherence if jsonMode isn't fully supported by all OpenRouter models
+      const messages = [
+        { role: 'system', content: "You are a psychological assessment system. Output strictly valid JSON." },
+        { role: 'user', content: prompt }
+      ];
+      text = await callOpenRouter(messages, model, apiKey, 0.3, true);
+    }
+
+    if (!text) return null;
+
+    // Cleanup: Remove markdown code blocks if present (some models add them despite instructions)
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    return JSON.parse(cleanText) as AssessmentData;
   } catch (error) {
     console.error("Report Generation Error:", error);
     return null;
@@ -131,16 +205,16 @@ export const generateAssessmentReport = async (history: Message[]): Promise<Asse
 
 /**
  * Agent 2: Counseling Agent
- * Uses the report and uploaded files to provide therapy.
  */
 export const sendCounselingMessage = async (
   history: Message[],
   newMessage: string,
   assessmentData: AssessmentData | null,
   uploadedContext: string[],
-  agentName: string
+  agentName: string,
+  config: ApiConfig
 ): Promise<string> => {
-  const model = "gemini-2.5-flash";
+  const { apiKey, model, provider } = getEffectiveConfig(config);
 
   const combinedContext = uploadedContext.join("\n\n---\n\n");
   const reportContext = assessmentData ? JSON.stringify(assessmentData) : "暂无详细报告";
@@ -165,20 +239,38 @@ export const sendCounselingMessage = async (
   `;
 
   try {
-     const chat = ai.chats.create({
-      model,
-      config: {
-        systemInstruction,
-        temperature: 0.6,
-      },
-      history: history.filter(h => h.role !== 'system').map(h => ({
-        role: h.role === 'model' ? 'model' : 'user',
-        parts: [{ text: h.text }],
-      })),
-    });
+    // --- GEMINI PROVIDER ---
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey });
+      const chat = ai.chats.create({
+        model,
+        config: {
+          systemInstruction,
+          temperature: 0.6,
+        },
+        history: history.filter(h => h.role !== 'system').map(h => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: h.text }],
+        })),
+      });
 
-    const result = await chat.sendMessage({ message: newMessage });
-    return result.text;
+      const result = await chat.sendMessage({ message: newMessage });
+      return result.text || "";
+    } 
+    
+    // --- OPENROUTER PROVIDER ---
+    else {
+      const messages = [
+        { role: 'system', content: systemInstruction },
+        ...history.filter(h => h.role !== 'system').map(h => ({
+          role: h.role === 'model' ? 'assistant' : 'user',
+          content: h.text
+        })),
+        { role: 'user', content: newMessage }
+      ];
+      return await callOpenRouter(messages, model, apiKey, 0.6);
+    }
+
   } catch (error) {
     console.error("Counseling Chat Error:", error);
     return `${agentName}正在深入思考，请稍等...`;

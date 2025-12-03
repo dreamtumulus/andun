@@ -43,3 +43,9 @@ export interface UserProfile {
   badgeNumber: string; 
   uploadedFilesContent: string[]; 
 }
+
+export interface ApiConfig {
+  provider: 'gemini' | 'openrouter';
+  apiKey: string;
+  model: string;
+}

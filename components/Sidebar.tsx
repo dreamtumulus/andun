@@ -1,6 +1,7 @@
+
 import React from 'react';
-import { ShieldAlert, FileText, HeartHandshake, User, Activity } from 'lucide-react';
-import { AppMode } from '../types';
+import { ShieldAlert, FileText, HeartHandshake, User, Activity, LayoutDashboard, LogOut } from 'lucide-react';
+import { AppMode, User as UserType } from '../types';
 
 interface SidebarProps {
   currentMode: AppMode;
@@ -8,10 +9,23 @@ interface SidebarProps {
   reportAvailable: boolean;
   agent1Name: string;
   agent2Name: string;
+  currentUser: UserType | null;
+  onLogout: () => void;
+  isAdminViewing?: boolean; // If admin is viewing another user's profile
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentMode, setMode, reportAvailable, agent1Name, agent2Name }) => {
-  const menuItems = [
+const Sidebar: React.FC<SidebarProps> = ({ 
+  currentMode, 
+  setMode, 
+  reportAvailable, 
+  agent1Name, 
+  agent2Name,
+  currentUser,
+  onLogout,
+  isAdminViewing
+}) => {
+  // Navigation for Normal Officers
+  const officerItems = [
     {
       id: AppMode.ASSESSMENT,
       label: `心理评估 (${agent1Name})`,
@@ -34,6 +48,29 @@ const Sidebar: React.FC<SidebarProps> = ({ currentMode, setMode, reportAvailable
     }
   ];
 
+  // Navigation for Admins (Main View)
+  const adminItems = [
+    {
+      id: AppMode.ADMIN_DASHBOARD,
+      label: '全队态势',
+      icon: <LayoutDashboard size={20} />,
+      description: '全局监控与管理'
+    }
+  ];
+
+  // Decide which items to show
+  // If Admin is viewing a specific user (isAdminViewing is true), they see the officer menu for that user
+  // If Admin is in Dashboard, they see admin menu
+  // If Officer, they see officer menu
+  let items = officerItems;
+  
+  if (currentUser?.role === 'admin' && !isAdminViewing) {
+    items = adminItems;
+  }
+
+  // Prevent sidebar rendering if not logged in (handled by App usually, but safe guard)
+  if (!currentUser) return null;
+
   return (
     <div className="w-80 bg-slate-900 text-white flex flex-col h-full shadow-xl shrink-0">
       <div className="p-6 border-b border-slate-700 flex items-center gap-3">
@@ -42,12 +79,14 @@ const Sidebar: React.FC<SidebarProps> = ({ currentMode, setMode, reportAvailable
         </div>
         <div>
           <h1 className="text-xl font-bold tracking-wider">警务安盾</h1>
-          <p className="text-xs text-slate-400">智能心理支持系统</p>
+          <p className="text-xs text-slate-400">
+            {currentUser.role === 'admin' ? '管理员控制台' : '智能心理支持系统'}
+          </p>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto py-6 px-4 space-y-2">
-        {menuItems.map((item) => (
+        {items.map((item) => (
           <button
             key={item.id}
             onClick={() => !item.disabled && setMode(item.id)}
@@ -73,18 +112,26 @@ const Sidebar: React.FC<SidebarProps> = ({ currentMode, setMode, reportAvailable
       </div>
 
       <div className="p-4 border-t border-slate-700 bg-slate-950/50">
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-800/50 border border-slate-800">
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-800/50 border border-slate-800 mb-3">
           <div className="bg-slate-700 p-2 rounded-full">
             <User size={16} />
           </div>
-          <div className="overflow-hidden">
-            <p className="text-sm font-medium truncate">警员 9527</p>
-            <p className="text-xs text-green-400 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-              在线
+          <div className="overflow-hidden flex-1">
+            <p className="text-sm font-medium truncate">{currentUser.name}</p>
+            <p className="text-xs text-slate-400 truncate">
+               {currentUser.role === 'admin' ? '系统管理员' : currentUser.badgeNumber}
             </p>
           </div>
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
         </div>
+        
+        <button 
+          onClick={onLogout}
+          className="w-full flex items-center justify-center gap-2 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors text-sm"
+        >
+          <LogOut size={16} />
+          退出 / 切换账号
+        </button>
       </div>
     </div>
   );

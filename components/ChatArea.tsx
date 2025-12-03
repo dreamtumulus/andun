@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Upload, Paperclip, LogOut, RefreshCw } from 'lucide-react';
+import { Send, Upload, Paperclip, LogOut, RefreshCw, Bot } from 'lucide-react';
 import { Message } from '../types';
 import MessageBubble from './MessageBubble';
 
@@ -14,6 +14,7 @@ interface ChatAreaProps {
   onEndSession?: () => void;
   onUpdateReport?: () => void; // For Counseling mode to manually trigger update
   isUpdatingReport?: boolean;
+  onFeedback?: (messageId: string, type: 'up' | 'down') => void;
 }
 
 const ChatArea: React.FC<ChatAreaProps> = ({ 
@@ -26,7 +27,8 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   uploadedFiles,
   onEndSession,
   onUpdateReport,
-  isUpdatingReport
+  isUpdatingReport,
+  onFeedback
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -110,7 +112,12 @@ const ChatArea: React.FC<ChatAreaProps> = ({
         )}
         
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} agentName={agentName} />
+          <MessageBubble 
+            key={msg.id} 
+            message={msg} 
+            agentName={agentName} 
+            onFeedback={onFeedback}
+          />
         ))}
         
         {isTyping && (
@@ -196,7 +203,5 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     </div>
   );
 };
-
-import { Bot } from 'lucide-react';
 
 export default ChatArea;

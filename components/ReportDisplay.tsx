@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   AlertTriangle, 
@@ -8,7 +9,8 @@ import {
   Zap, 
   Heart, 
   ShieldCheck, 
-  ArrowRight 
+  ArrowRight,
+  ChevronLeft
 } from 'lucide-react';
 import { AssessmentData } from '../types';
 
@@ -16,9 +18,17 @@ interface ReportDisplayProps {
   data: AssessmentData;
   onContinueToCounseling: () => void;
   counselingAgentName: string;
+  isAdmin?: boolean;
+  onBackToDashboard?: () => void;
 }
 
-const ReportDisplay: React.FC<ReportDisplayProps> = ({ data, onContinueToCounseling, counselingAgentName }) => {
+const ReportDisplay: React.FC<ReportDisplayProps> = ({ 
+  data, 
+  onContinueToCounseling, 
+  counselingAgentName,
+  isAdmin,
+  onBackToDashboard
+}) => {
   const isHighRisk = data.riskLevel === 'high';
   const isMediumRisk = data.riskLevel === 'medium';
 
@@ -32,6 +42,17 @@ const ReportDisplay: React.FC<ReportDisplayProps> = ({ data, onContinueToCounsel
     <div className="h-full overflow-y-auto bg-slate-100 p-4 md:p-8">
       <div className="max-w-5xl mx-auto space-y-6">
         
+        {/* Admin Navigation */}
+        {isAdmin && onBackToDashboard && (
+          <button 
+            onClick={onBackToDashboard}
+            className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors mb-2"
+          >
+            <ChevronLeft size={20} />
+            <span className="font-medium">返回指挥中心</span>
+          </button>
+        )}
+
         {/* Header Section */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-600 to-indigo-700"></div>
@@ -41,7 +62,7 @@ const ReportDisplay: React.FC<ReportDisplayProps> = ({ data, onContinueToCounsel
                 <ShieldCheck className="text-blue-600 w-8 h-8" />
                 警务人员心理健康综合评估
               </h1>
-              <p className="text-slate-500 mt-2 text-sm">生成时间: {new Date().toLocaleString()}</p>
+              <p className="text-slate-500 mt-2 text-sm">生成时间: {new Date(data.lastUpdated).toLocaleString()}</p>
             </div>
             
             <div className={`px-4 py-2 rounded-xl border flex items-center gap-2 font-bold ${riskColor}`}>
@@ -177,13 +198,16 @@ const ReportDisplay: React.FC<ReportDisplayProps> = ({ data, onContinueToCounsel
              <Download size={18} />
              导出 PDF 档案
            </button>
-           <button 
-             onClick={onContinueToCounseling}
-             className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 rounded-xl shadow-lg shadow-blue-900/20 transition-all hover:shadow-xl hover:-translate-y-0.5 font-bold flex items-center gap-2"
-           >
-             进入心理疏导 ({counselingAgentName})
-             <ArrowRight size={18} />
-           </button>
+           
+           {!isAdmin && (
+             <button 
+               onClick={onContinueToCounseling}
+               className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 rounded-xl shadow-lg shadow-blue-900/20 transition-all hover:shadow-xl hover:-translate-y-0.5 font-bold flex items-center gap-2"
+             >
+               进入心理疏导 ({counselingAgentName})
+               <ArrowRight size={18} />
+             </button>
+           )}
         </div>
 
         <div className="text-center text-xs text-slate-400 max-w-2xl mx-auto pb-4">

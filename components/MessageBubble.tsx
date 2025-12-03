@@ -1,13 +1,14 @@
 import React from 'react';
 import { Message } from '../types';
-import { Bot, User } from 'lucide-react';
+import { Bot, User, ThumbsUp, ThumbsDown } from 'lucide-react';
 
 interface MessageBubbleProps {
   message: Message;
   agentName: string;
+  onFeedback?: (messageId: string, type: 'up' | 'down') => void;
 }
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message, agentName }) => {
+const MessageBubble: React.FC<MessageBubbleProps> = ({ message, agentName, onFeedback }) => {
   const isUser = message.role === 'user';
   
   return (
@@ -38,6 +39,26 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, agentName }) => 
           `}>
             {message.text}
           </div>
+          
+          {/* Feedback Area for Model Messages */}
+          {!isUser && onFeedback && (
+            <div className="flex gap-2 mt-1 px-1">
+               <button 
+                 onClick={() => onFeedback(message.id, 'up')}
+                 className={`p-1 rounded-md transition-colors ${message.feedback === 'up' ? 'text-green-600 bg-green-50' : 'text-slate-300 hover:bg-slate-50 hover:text-slate-500'}`}
+                 title="有帮助"
+               >
+                 <ThumbsUp size={14} />
+               </button>
+               <button 
+                 onClick={() => onFeedback(message.id, 'down')}
+                 className={`p-1 rounded-md transition-colors ${message.feedback === 'down' ? 'text-red-600 bg-red-50' : 'text-slate-300 hover:bg-slate-50 hover:text-slate-500'}`}
+                 title="无帮助"
+               >
+                 <ThumbsDown size={14} />
+               </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

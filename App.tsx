@@ -1,13 +1,22 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import ReportDisplay from './components/ReportDisplay';
-import { AppMode, Message, AssessmentData, ApiConfig } from './types';
+import LoginModal from './components/LoginModal';
+import AdminDashboard from './components/AdminDashboard';
+import { AppMode, Message, AssessmentData, ApiConfig, User, UserDataStore } from './types';
 import { sendAssessmentMessage, generateAssessmentReport, sendCounselingMessage, updateAssessmentReport } from './services/geminiService';
+import { mockAuthService } from './services/mockDataService';
 import { Sparkles, Settings, X, Save, Key, Server, Cpu } from 'lucide-react';
 
 export default function App() {
-  const [currentMode, setCurrentMode] = useState<AppMode>(AppMode.ASSESSMENT);
+  // --- Auth State ---
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [targetUserId, setTargetUserId] = useState<string | null>(null); // The user whose data we are viewing
+
+  // --- App Mode ---
+  const [currentMode, setCurrentMode] = useState<AppMode>(AppMode.LOGIN);
   
   // Custom Agent Names
   const [agent1Name, setAgent1Name] = useState("心语");
@@ -21,73 +30,154 @@ export default function App() {
     model: ''
   });
 
-  // Assessment State (Agent 1)
-  const [assessmentMessages, setAssessmentMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'model',
-      text: `你好，我是${agent1Name}。不用把我当成冷冰冰的程序，今天工作累吗？我们可以随便聊聊。`,
-      timestamp: new Date()
-    }
-  ]);
-  const [isAssessmentTyping, setIsAssessmentTyping] = useState(false);
+  // --- Data State (Synced with Mock Service) ---
+  const [assessmentMessages, setAssessmentMessages] = useState<Message[]>([]);
+  const [reportData, setReportData] = useState<AssessmentData | null>(null);
+  const [counselingMessages, setCounselingMessages] = useState<Message[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<{name: string, content: string}[]>([]);
   const [recordCount, setRecordCount] = useState(0);
 
-  // Report State (The Long Term Memory)
-  const [reportData, setReportData] = useState<AssessmentData | null>(null);
+  // --- UI Loading States ---
+  const [isAssessmentTyping, setIsAssessmentTyping] = useState(false);
+  const [isCounselingTyping, setIsCounselingTyping] = useState(false);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isUpdatingReport, setIsUpdatingReport] = useState(false);
 
-  // Counseling State (Agent 2)
-  const [counselingMessages, setCounselingMessages] = useState<Message[]>([]);
-  const [isCounselingTyping, setIsCounselingTyping] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<{name: string, content: string}[]>([]);
+  // --- Effect: Load Data when Target User Changes ---
+  useEffect(() => {
+    if (!currentUser || !targetUserId) return;
 
-  // ---- Agent 1 Logic ----
+    // Fetch data from mock service
+    const data = mockAuthService.getUserData(targetUserId);
+    
+    // If new user with no chat history, init welcome message
+    if (data.assessmentMessages.length === 0) {
+       const welcomeMsg: Message = {
+        id: 'welcome',
+        role: 'model',
+        text: `你好，我是${agent1Name}。不用把我当成冷冰冰的程序，今天工作累吗？我们可以随便聊聊。`,
+        timestamp: new Date()
+      };
+      setAssessmentMessages([welcomeMsg]);
+      // Save immediately to persist initialization
+      mockAuthService.saveUserData(targetUserId, { assessmentMessages: [welcomeMsg] });
+    } else {
+      setAssessmentMessages(data.assessmentMessages);
+    }
+
+    setCounselingMessages(data.counselingMessages);
+    setReportData(data.reportData);
+    setUploadedFiles(data.uploadedFiles);
+    setRecordCount(data.recordCount || data.assessmentMessages.filter(m=>m.role==='user').length);
+
+  }, [targetUserId, currentUser, agent1Name]);
+
+  // --- Handlers for Data Persistence ---
+  
+  const saveToCloud = (partialData: Partial<UserDataStore>) => {
+    if (targetUserId) {
+      mockAuthService.saveUserData(targetUserId, partialData);
+    }
+  };
+
+  // --- Auth Handlers ---
+  const handleLogin = async (username: string) => {
+    const user = await mockAuthService.login(username);
+    if (user) {
+      setCurrentUser(user);
+      if (user.role === 'admin') {
+        setCurrentMode(AppMode.ADMIN_DASHBOARD);
+        setTargetUserId(null);
+      } else {
+        setTargetUserId(user.id);
+        setCurrentMode(AppMode.ASSESSMENT);
+      }
+    } else {
+      alert("用户不存在 (尝试: 9527, 8848, admin)");
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setTargetUserId(null);
+    setCurrentMode(AppMode.LOGIN);
+    setAssessmentMessages([]);
+    setCounselingMessages([]);
+    setReportData(null);
+  };
+
+  const handleAdminViewUser = (userId: string) => {
+    setTargetUserId(userId);
+    // Determine where to land: if report exists, show report, else show assessment
+    const data = mockAuthService.getUserData(userId);
+    if (data.reportData) {
+      setCurrentMode(AppMode.REPORT);
+    } else {
+      setCurrentMode(AppMode.ASSESSMENT);
+    }
+  };
+
+  const handleBackToDashboard = () => {
+    setTargetUserId(null);
+    setCurrentMode(AppMode.ADMIN_DASHBOARD);
+  };
+
+  // --- Chat Logic Handlers (Wrapped with Persistence) ---
+
   const handleAssessmentSend = async (text: string) => {
-    // Add user message
     const userMsg: Message = { id: Date.now().toString(), role: 'user', text, timestamp: new Date() };
     const newHistory = [...assessmentMessages, userMsg];
+    
+    // Update State
     setAssessmentMessages(newHistory);
     setRecordCount(prev => prev + 1);
     setIsAssessmentTyping(true);
+    
+    // Persist
+    saveToCloud({ assessmentMessages: newHistory, recordCount: recordCount + 1 });
 
-    // Call API with config AND current report (Memory)
+    // Call API
     const responseText = await sendAssessmentMessage(
       newHistory, 
       text, 
       agent1Name, 
       apiConfig, 
-      reportData // Injecting existing report as memory
+      reportData
     );
 
-    // Add bot message
-    setAssessmentMessages(prev => [...prev, {
+    // Bot Reply
+    const botMsg: Message = {
       id: (Date.now() + 1).toString(),
       role: 'model',
       text: responseText,
       timestamp: new Date()
-    }]);
+    };
+    const finalHistory = [...newHistory, botMsg];
+    
+    setAssessmentMessages(finalHistory);
+    saveToCloud({ assessmentMessages: finalHistory });
     setIsAssessmentTyping(false);
   };
 
   const handleGenerateReport = async () => {
     setIsGeneratingReport(true);
-    // Pass existing report to prompt "update" vs "create new"
     const data = await generateAssessmentReport(assessmentMessages, apiConfig, reportData);
     
     if (data) {
       setReportData(data);
+      saveToCloud({ reportData: data });
       setCurrentMode(AppMode.REPORT);
       
-      // Initialize counseling chat if empty
+      // Init Counseling if needed
       if (counselingMessages.length === 0) {
-        setCounselingMessages([{
+        const initMsg: Message = {
           id: 'counseling-start',
           role: 'model',
           text: `你好，我是${agent2Name}。我已经详细阅读了你的评估报告。如果你愿意，我们可以针对报告中提到的压力点聊一聊，或者你可以上传之前的体检或心理档案，我会综合给出一份调理建议。`,
           timestamp: new Date()
-        }]);
+        };
+        setCounselingMessages([initMsg]);
+        saveToCloud({ counselingMessages: [initMsg] });
       }
     } else {
       alert("生成报告失败，请检查网络或 API 设置");
@@ -96,34 +186,45 @@ export default function App() {
     setIsGeneratingReport(false);
   };
 
-  // ---- Agent 2 Logic ----
   const handleCounselingSend = async (text: string) => {
      const userMsg: Message = { id: Date.now().toString(), role: 'user', text, timestamp: new Date() };
      const newHistory = [...counselingMessages, userMsg];
      setCounselingMessages(newHistory);
      setIsCounselingTyping(true);
+     saveToCloud({ counselingMessages: newHistory });
 
      const uploadedContext = uploadedFiles.map(f => `文件 [${f.name}]: ${f.content}`);
 
      const responseText = await sendCounselingMessage(
        newHistory, 
        text, 
-       reportData, // Agent 2 reads the latest memory
+       reportData, 
        uploadedContext,
        agent2Name,
        apiConfig
      );
 
-     setCounselingMessages(prev => [...prev, {
+     const botMsg: Message = {
       id: (Date.now() + 1).toString(),
       role: 'model',
       text: responseText,
       timestamp: new Date()
-     }]);
+     };
+     const finalHistory = [...newHistory, botMsg];
+
+     setCounselingMessages(finalHistory);
+     saveToCloud({ counselingMessages: finalHistory });
      setIsCounselingTyping(false);
   };
 
-  // Manual Trigger to Update Report based on Counseling Chat
+  const handleFeedback = (messageId: string, type: 'up' | 'down') => {
+    const updatedMessages = counselingMessages.map(msg => 
+      msg.id === messageId ? { ...msg, feedback: type } : msg
+    );
+    setCounselingMessages(updatedMessages);
+    saveToCloud({ counselingMessages: updatedMessages });
+  };
+
   const handleUpdateReportStatus = async () => {
     if (!reportData || counselingMessages.length < 2) return;
     
@@ -132,32 +233,42 @@ export default function App() {
     
     if (updatedData) {
       setReportData(updatedData);
-      // Optional: Add a system message to chat to confirm update
-      setCounselingMessages(prev => [...prev, {
+      saveToCloud({ reportData: updatedData });
+      
+      const sysMsg: Message = {
         id: Date.now().toString(),
         role: 'system',
         text: '【系统通知】：根据刚才的沟通，心理评估档案已同步更新。',
         timestamp: new Date()
-      }]);
+      };
+      const newHistory = [...counselingMessages, sysMsg];
+      setCounselingMessages(newHistory);
+      saveToCloud({ counselingMessages: newHistory });
     }
     setIsUpdatingReport(false);
   }
 
   const handleFileUpload = (content: string, fileName: string) => {
-    setUploadedFiles(prev => [...prev, { name: fileName, content }]);
-    setCounselingMessages(prev => [...prev, {
+    const newFiles = [...uploadedFiles, { name: fileName, content }];
+    setUploadedFiles(newFiles);
+    
+    const sysMsg: Message = {
       id: Date.now().toString(),
       role: 'system',
       text: `已上传文件: ${fileName}`,
       timestamp: new Date()
-    }]);
+    };
+    const newHistory = [...counselingMessages, sysMsg];
+    setCounselingMessages(newHistory);
+
+    saveToCloud({ uploadedFiles: newFiles, counselingMessages: newHistory });
   };
 
-  const handleEndSession = () => {
-    if (confirm("确定要结束当前会话并返回吗？")) {
-      setCurrentMode(AppMode.REPORT);
-    }
-  };
+  // --- Rendering ---
+
+  if (!currentUser || currentMode === AppMode.LOGIN) {
+    return <LoginModal onLogin={handleLogin} />;
+  }
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden font-sans">
@@ -167,6 +278,9 @@ export default function App() {
         reportAvailable={!!reportData}
         agent1Name={agent1Name}
         agent2Name={agent2Name}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        isAdminViewing={currentUser.role === 'admin' && targetUserId !== null}
       />
 
       <main className="flex-1 flex flex-col h-full relative">
@@ -174,10 +288,19 @@ export default function App() {
         <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm z-10 shrink-0">
            <div className="flex flex-col">
              <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+               {currentMode === AppMode.ADMIN_DASHBOARD && "指挥中心全局监控"}
                {currentMode === AppMode.ASSESSMENT && `心理状态评估 · ${agent1Name}`}
                {currentMode === AppMode.REPORT && "评估报告概览"}
                {currentMode === AppMode.COUNSELING && `专业心理疏导 · ${agent2Name}`}
+               
+               {/* Show who we are viewing if Admin */}
+               {currentUser.role === 'admin' && targetUserId && (
+                 <span className="bg-slate-100 text-slate-500 text-xs px-2 py-0.5 rounded ml-2 font-normal">
+                    正在查看: {mockAuthService.getUsers().find(u=>u.id===targetUserId)?.name}
+                 </span>
+               )}
              </h2>
+             
              {/* Status Indicators */}
              <div className="text-xs text-slate-500 flex items-center gap-2">
                {currentMode === AppMode.ASSESSMENT && (
@@ -201,6 +324,7 @@ export default function App() {
                <Settings size={20} />
              </button>
 
+             {/* Only allow report generation in Assessment mode if not admin (or admin can force it) */}
              {currentMode === AppMode.ASSESSMENT && (
                <button
                  onClick={handleGenerateReport}
@@ -231,6 +355,11 @@ export default function App() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-hidden relative">
+          
+          {currentMode === AppMode.ADMIN_DASHBOARD && (
+            <AdminDashboard onViewUser={handleAdminViewUser} />
+          )}
+
           {currentMode === AppMode.ASSESSMENT && (
             <ChatArea 
               messages={assessmentMessages}
@@ -238,7 +367,10 @@ export default function App() {
               isTyping={isAssessmentTyping}
               agentName={agent1Name}
               placeholder={`和${agent1Name}聊聊你的日常...`}
-              onEndSession={() => setCurrentMode(AppMode.REPORT)} 
+              onEndSession={() => {
+                if(currentUser.role === 'admin') handleBackToDashboard();
+                else setCurrentMode(AppMode.REPORT);
+              }} 
             />
           )}
 
@@ -247,7 +379,17 @@ export default function App() {
               data={reportData} 
               onContinueToCounseling={() => setCurrentMode(AppMode.COUNSELING)}
               counselingAgentName={agent2Name}
+              isAdmin={currentUser.role === 'admin'}
+              onBackToDashboard={handleBackToDashboard}
             />
+          )}
+
+          {/* Fallback for empty report in Report Mode */}
+          {currentMode === AppMode.REPORT && !reportData && (
+            <div className="flex flex-col items-center justify-center h-full text-slate-400">
+               <div className="mb-4 bg-slate-200 p-4 rounded-full"><Sparkles size={32}/></div>
+               <p>暂无评估报告，请先在评估对话中积累足够数据。</p>
+            </div>
           )}
 
           {currentMode === AppMode.COUNSELING && (
@@ -259,15 +401,19 @@ export default function App() {
               placeholder={`向${agent2Name}咨询建议...`}
               onFileUpload={handleFileUpload}
               uploadedFiles={uploadedFiles.map(f => f.name)}
-              onEndSession={() => setCurrentMode(AppMode.REPORT)}
+              onEndSession={() => {
+                 if(currentUser.role === 'admin') handleBackToDashboard();
+                 else setCurrentMode(AppMode.REPORT);
+              }}
               onUpdateReport={handleUpdateReportStatus}
               isUpdatingReport={isUpdatingReport}
+              onFeedback={handleFeedback} // Add feedback handler
             />
           )}
         </div>
       </main>
 
-      {/* Settings Modal */}
+      {/* Settings Modal (Same as before) */}
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 animate-in fade-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">

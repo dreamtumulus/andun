@@ -3,7 +3,7 @@ import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import ReportDisplay from './components/ReportDisplay';
 import { AppMode, Message, AssessmentData, ApiConfig } from './types';
-import { sendAssessmentMessage, generateAssessmentReport, sendCounselingMessage } from './services/geminiService';
+import { sendAssessmentMessage, generateAssessmentReport, sendCounselingMessage, updateAssessmentReport } from './services/geminiService';
 import { Sparkles, Settings, X, Save, Key, Server, Cpu } from 'lucide-react';
 
 export default function App() {
@@ -33,9 +33,10 @@ export default function App() {
   const [isAssessmentTyping, setIsAssessmentTyping] = useState(false);
   const [recordCount, setRecordCount] = useState(0);
 
-  // Report State
+  // Report State (The Long Term Memory)
   const [reportData, setReportData] = useState<AssessmentData | null>(null);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isUpdatingReport, setIsUpdatingReport] = useState(false);
 
   // Counseling State (Agent 2)
   const [counselingMessages, setCounselingMessages] = useState<Message[]>([]);
@@ -51,8 +52,14 @@ export default function App() {
     setRecordCount(prev => prev + 1);
     setIsAssessmentTyping(true);
 
-    // Call API with config
-    const responseText = await sendAssessmentMessage(newHistory, text, agent1Name, apiConfig);
+    // Call API with config AND current report (Memory)
+    const responseText = await sendAssessmentMessage(
+      newHistory, 
+      text, 
+      agent1Name, 
+      apiConfig, 
+      reportData // Injecting existing report as memory
+    );
 
     // Add bot message
     setAssessmentMessages(prev => [...prev, {
@@ -66,22 +73,24 @@ export default function App() {
 
   const handleGenerateReport = async () => {
     setIsGeneratingReport(true);
-    const data = await generateAssessmentReport(assessmentMessages, apiConfig);
+    // Pass existing report to prompt "update" vs "create new"
+    const data = await generateAssessmentReport(assessmentMessages, apiConfig, reportData);
     
     if (data) {
       setReportData(data);
       setCurrentMode(AppMode.REPORT);
       
-      // Initialize counseling chat with context
-      setCounselingMessages([{
-        id: 'counseling-start',
-        role: 'model',
-        text: `你好，我是${agent2Name}。我已经详细阅读了你的评估报告。如果你愿意，我们可以针对报告中提到的压力点聊一聊，或者你可以上传之前的体检或心理档案，我会综合给出一份调理建议。`,
-        timestamp: new Date()
-      }]);
+      // Initialize counseling chat if empty
+      if (counselingMessages.length === 0) {
+        setCounselingMessages([{
+          id: 'counseling-start',
+          role: 'model',
+          text: `你好，我是${agent2Name}。我已经详细阅读了你的评估报告。如果你愿意，我们可以针对报告中提到的压力点聊一聊，或者你可以上传之前的体检或心理档案，我会综合给出一份调理建议。`,
+          timestamp: new Date()
+        }]);
+      }
     } else {
-      // Fallback if JSON generation fails
-      alert("生成报告失败，请稍后重试");
+      alert("生成报告失败，请检查网络或 API 设置");
     }
     
     setIsGeneratingReport(false);
@@ -99,7 +108,7 @@ export default function App() {
      const responseText = await sendCounselingMessage(
        newHistory, 
        text, 
-       reportData, 
+       reportData, // Agent 2 reads the latest memory
        uploadedContext,
        agent2Name,
        apiConfig
@@ -114,15 +123,40 @@ export default function App() {
      setIsCounselingTyping(false);
   };
 
+  // Manual Trigger to Update Report based on Counseling Chat
+  const handleUpdateReportStatus = async () => {
+    if (!reportData || counselingMessages.length < 2) return;
+    
+    setIsUpdatingReport(true);
+    const updatedData = await updateAssessmentReport(reportData, counselingMessages, apiConfig);
+    
+    if (updatedData) {
+      setReportData(updatedData);
+      // Optional: Add a system message to chat to confirm update
+      setCounselingMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'system',
+        text: '【系统通知】：根据刚才的沟通，心理评估档案已同步更新。',
+        timestamp: new Date()
+      }]);
+    }
+    setIsUpdatingReport(false);
+  }
+
   const handleFileUpload = (content: string, fileName: string) => {
     setUploadedFiles(prev => [...prev, { name: fileName, content }]);
-    // Notify user in chat
     setCounselingMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'system',
       text: `已上传文件: ${fileName}`,
       timestamp: new Date()
     }]);
+  };
+
+  const handleEndSession = () => {
+    if (confirm("确定要结束当前会话并返回吗？")) {
+      setCurrentMode(AppMode.REPORT);
+    }
   };
 
   return (
@@ -137,19 +171,25 @@ export default function App() {
 
       <main className="flex-1 flex flex-col h-full relative">
         {/* Header Bar */}
-        <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm z-10">
+        <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm z-10 shrink-0">
            <div className="flex flex-col">
              <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
                {currentMode === AppMode.ASSESSMENT && `心理状态评估 · ${agent1Name}`}
                {currentMode === AppMode.REPORT && "评估报告概览"}
                {currentMode === AppMode.COUNSELING && `专业心理疏导 · ${agent2Name}`}
              </h2>
-             {currentMode === AppMode.ASSESSMENT && (
-               <div className="text-xs text-slate-500 flex items-center gap-1">
-                 <span>已收集对话记录: {recordCount} 条</span>
-                 {recordCount >= 5 && <span className="text-green-600 font-medium">(数据量充足)</span>}
-               </div>
-             )}
+             {/* Status Indicators */}
+             <div className="text-xs text-slate-500 flex items-center gap-2">
+               {currentMode === AppMode.ASSESSMENT && (
+                 <>
+                   <span>已收集记录: {recordCount} 条</span>
+                   {reportData && <span className="text-blue-600 font-medium">· 已关联历史档案</span>}
+                 </>
+               )}
+               {currentMode === AppMode.COUNSELING && reportData && (
+                  <span className="text-slate-400">上次档案更新: {new Date(reportData.lastUpdated).toLocaleTimeString()}</span>
+               )}
+             </div>
            </div>
 
            <div className="flex items-center gap-3">
@@ -176,12 +216,12 @@ export default function App() {
                  {isGeneratingReport ? (
                    <>
                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                     生成中...
+                     {reportData ? "更新报告" : "生成报告"}
                    </>
                  ) : (
                    <>
                      <Sparkles size={16} />
-                     生成评估报告
+                     {reportData ? "更新报告" : "生成报告"}
                    </>
                  )}
                </button>
@@ -198,6 +238,7 @@ export default function App() {
               isTyping={isAssessmentTyping}
               agentName={agent1Name}
               placeholder={`和${agent1Name}聊聊你的日常...`}
+              onEndSession={() => setCurrentMode(AppMode.REPORT)} 
             />
           )}
 
@@ -218,6 +259,9 @@ export default function App() {
               placeholder={`向${agent2Name}咨询建议...`}
               onFileUpload={handleFileUpload}
               uploadedFiles={uploadedFiles.map(f => f.name)}
+              onEndSession={() => setCurrentMode(AppMode.REPORT)}
+              onUpdateReport={handleUpdateReportStatus}
+              isUpdatingReport={isUpdatingReport}
             />
           )}
         </div>

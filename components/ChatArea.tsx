@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Upload, Paperclip } from 'lucide-react';
+import { Send, Upload, Paperclip, LogOut, RefreshCw } from 'lucide-react';
 import { Message } from '../types';
 import MessageBubble from './MessageBubble';
 
@@ -11,6 +11,9 @@ interface ChatAreaProps {
   placeholder?: string;
   onFileUpload?: (content: string, fileName: string) => void;
   uploadedFiles?: string[];
+  onEndSession?: () => void;
+  onUpdateReport?: () => void; // For Counseling mode to manually trigger update
+  isUpdatingReport?: boolean;
 }
 
 const ChatArea: React.FC<ChatAreaProps> = ({ 
@@ -20,7 +23,10 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   agentName, 
   placeholder,
   onFileUpload,
-  uploadedFiles
+  uploadedFiles,
+  onEndSession,
+  onUpdateReport,
+  isUpdatingReport
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -51,7 +57,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     const file = e.target.files?.[0];
     if (!file || !onFileUpload) return;
 
-    // Simple text/markdown reader for demo purposes
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
@@ -59,14 +64,42 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     };
     reader.readAsText(file);
     
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-50/50">
+    <div className="flex flex-col h-full bg-slate-50/50 relative">
+      {/* Internal Header for Chat Actions */}
+      <div className="absolute top-0 left-0 right-0 z-10 px-6 py-2 flex justify-between items-center bg-gradient-to-b from-slate-100/90 to-transparent pointer-events-none">
+         <div className="pointer-events-auto">
+           {/* Left side spacer or additional controls */}
+         </div>
+         <div className="flex gap-2 pointer-events-auto">
+            {onUpdateReport && (
+              <button 
+                onClick={onUpdateReport}
+                disabled={isUpdatingReport}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white backdrop-blur-sm border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm transition-all hover:text-blue-600"
+                title="根据最新对话更新评估报告"
+              >
+                <RefreshCw size={14} className={isUpdatingReport ? "animate-spin" : ""} />
+                {isUpdatingReport ? "正在同步记忆..." : "更新评估状态"}
+              </button>
+            )}
+            {onEndSession && (
+              <button 
+                onClick={onEndSession}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white backdrop-blur-sm border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm transition-all hover:text-red-600"
+              >
+                <LogOut size={14} />
+                结束/返回
+              </button>
+            )}
+         </div>
+      </div>
+
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-2">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-2 pt-12">
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
             <div className="bg-slate-200 p-4 rounded-full mb-4">
@@ -164,7 +197,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   );
 };
 
-// Import Bot here to avoid circular dependency issues or redefine icon if needed
 import { Bot } from 'lucide-react';
 
 export default ChatArea;

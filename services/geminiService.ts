@@ -52,25 +52,38 @@ const callOpenRouter = async (
 };
 
 /**
- * Agent 1: Assessment Agent
+ * Agent 1: Assessment Agent (With Memory)
  */
 export const sendAssessmentMessage = async (
   history: Message[],
   newMessage: string,
   agentName: string,
-  config: ApiConfig
+  config: ApiConfig,
+  currentReport: AssessmentData | null = null
 ): Promise<string> => {
   const { apiKey, model, provider } = getEffectiveConfig(config);
   
+  // Memory Injection
+  const memoryContext = currentReport 
+    ? `【长期记忆/历史评估档案】：
+       此前评估时间：${currentReport.lastUpdated}
+       已知主要压力源：${currentReport.stressSources.map(s => s.category).join(', ')}
+       当前风险等级：${currentReport.riskLevel}
+       
+       请基于以上记忆与用户继续对话。如果用户提到情况好转或恶化，请在对话中予以回应。`
+    : "这是初次对话，暂无历史评估档案。";
+
   const systemInstruction = `
     你叫“${agentName}”，是警务安盾系统中的专业心理评估助手。
     你的目标是通过自然、轻松的聊天，评估用户的心理状态（重点关注：压力水平、PTSD迹象、职业倦怠、家庭关系支持）。
     
+    ${memoryContext}
+
     关键规则：
     1. **绝对不要**使用问卷调查式或生硬的提问。像一个值得信赖的战友或老朋友一样聊天。
     2. 循序渐进。先聊日常，工作强度，再慢慢深入情绪感受。
     3. 表现出高度的同理心。警务人员工作压力大，你要多给予肯定和理解。
-    4. 记住用户的回答，并在后续对话中自然引用。
+    4. 记住用户的回答，并在后续对话中自然引用（长效记忆）。
     5. 你的回复简短有力，不要长篇大论，鼓励用户多说。
     6. 控制对话节奏，不要让用户感到被审问。
   `;
@@ -116,11 +129,12 @@ export const sendAssessmentMessage = async (
 };
 
 /**
- * Generate Assessment Report
+ * Generate (or Regenerate) Assessment Report
  */
 export const generateAssessmentReport = async (
   history: Message[], 
-  config: ApiConfig
+  config: ApiConfig,
+  existingReport: AssessmentData | null = null
 ): Promise<AssessmentData | null> => {
   const { apiKey, model, provider } = getEffectiveConfig(config);
 
@@ -129,10 +143,16 @@ export const generateAssessmentReport = async (
     .map(h => `${h.role === 'user' ? '警员' : '评估助手'}: ${h.text}`)
     .join('\n');
 
+  const updateInstruction = existingReport 
+    ? `注意：这是一次更新评估。之前的风险等级为 ${existingReport.riskLevel}。请根据最新的对话内容，判断情况是改善了、恶化了还是保持不变，并更新报告数据。`
+    : "";
+
   const prompt = `
     作为资深警务心理学家，请根据以下对话记录，生成一份专业的《警务人员心理健康评估报告》。
-    请严格按照 JSON 格式输出，不要包含 Markdown 格式标记（如 \`\`\`json ... \`\`\`）。
+    请严格按照 JSON 格式输出，不要包含 Markdown 格式标记。
     
+    ${updateInstruction}
+
     【对话记录】：
     ${conversationText}
     
@@ -146,18 +166,18 @@ export const generateAssessmentReport = async (
       "summary": "一段简明扼要的总体评估摘要（150字以内，包含核心心理特征概括）",
       "stressSources": [
         { 
-          "category": "来源类别（如：一线执法风险/组织管理压力/家庭工作冲突/创伤性事件余波）", 
+          "category": "来源类别", 
           "description": "具体的压力表现描述", 
           "severity": 1-10的整数 
         }
       ],
       "psychologicalStatus": {
-        "emotionalStability": "情绪稳定性评估（关注易激惹性、焦虑水平及情绪调节能力）",
-        "burnoutLevel": "职业倦怠程度（基于MBI模型分析情绪衰竭、去人性化及成就感低落情况）",
-        "socialSupport": "社会支持系统评估（战友支持、组织关怀、家庭支持网络的稳固度）"
+        "emotionalStability": "情绪稳定性评估",
+        "burnoutLevel": "职业倦怠程度",
+        "socialSupport": "社会支持系统评估"
       },
       "riskLevel": "low" | "medium" | "high",
-      "riskAnalysis": "风险等级判定依据（若为中高风险，需明确指出具体的风险指标，如睡眠障碍严重程度、攻击性倾向等）",
+      "riskAnalysis": "风险等级判定依据",
       "recommendations": [
         { "title": "建议标题", "content": "具体建议内容", "type": "immediate" | "lifestyle" | "professional" }
       ]
@@ -183,7 +203,6 @@ export const generateAssessmentReport = async (
     
     // --- OPENROUTER PROVIDER ---
     else {
-      // Force JSON in system message for stronger adherence if jsonMode isn't fully supported by all OpenRouter models
       const messages = [
         { role: 'system', content: "You are a psychological assessment system. Output strictly valid JSON." },
         { role: 'user', content: prompt }
@@ -193,10 +212,13 @@ export const generateAssessmentReport = async (
 
     if (!text) return null;
 
-    // Cleanup: Remove markdown code blocks if present (some models add them despite instructions)
     const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanText) as AssessmentData;
     
-    return JSON.parse(cleanText) as AssessmentData;
+    // Add Timestamp
+    parsed.lastUpdated = new Date().toISOString();
+    return parsed;
+
   } catch (error) {
     console.error("Report Generation Error:", error);
     return null;
@@ -204,7 +226,74 @@ export const generateAssessmentReport = async (
 };
 
 /**
- * Agent 2: Counseling Agent
+ * Update Report based on Counseling feedback (Memory Update)
+ */
+export const updateAssessmentReport = async (
+  currentReport: AssessmentData,
+  recentHistory: Message[],
+  config: ApiConfig
+): Promise<AssessmentData | null> => {
+  const { apiKey, model, provider } = getEffectiveConfig(config);
+
+  const conversationText = recentHistory
+    .slice(-10) // Only look at recent context to save tokens/focus on recent changes
+    .map(h => `${h.role === 'user' ? '用户' : '疏导助手'}: ${h.text}`)
+    .join('\n');
+
+  const prompt = `
+    作为心理评估系统的主控中心，你需要根据最新的【疏导对话】来更新已有的【心理评估报告】。
+    
+    【当前评估报告 (JSON)】:
+    ${JSON.stringify(currentReport)}
+    
+    【最近的疏导对话】:
+    ${conversationText}
+    
+    任务：
+    判断用户的心理状态是否发生变化（如：情绪是否平复、是否采纳了建议、是否有新的压力源）。
+    请修改 JSON 数据中的 summary, stressSources (severity), psychologicalStatus, riskLevel 等字段以反映最新状态。
+    如果变化不大，保留原值。
+    
+    请严格返回完整的、更新后的 JSON 对象。不要使用 Markdown 标记。
+  `;
+
+  try {
+    let text = "";
+
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey });
+      const result = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.2, // Lower temperature for data updates
+        }
+      });
+      text = result.text || "";
+    } else {
+      const messages = [
+        { role: 'system', content: "You are a data updater. Output strictly valid JSON." },
+        { role: 'user', content: prompt }
+      ];
+      text = await callOpenRouter(messages, model, apiKey, 0.2, true);
+    }
+
+    if (!text) return null;
+
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanText) as AssessmentData;
+    parsed.lastUpdated = new Date().toISOString();
+    return parsed;
+
+  } catch (error) {
+    console.error("Update Report Error:", error);
+    return null;
+  }
+}
+
+/**
+ * Agent 2: Counseling Agent (With Memory Access)
  */
 export const sendCounselingMessage = async (
   history: Message[],
@@ -223,8 +312,7 @@ export const sendCounselingMessage = async (
     你叫“${agentName}”，是警务系统的资深心理咨询专家。
     你的任务是基于用户的心理评估报告和历史档案，进行个性化的心理疏导和咨询。
     
-    参考资料：
-    【最新评估报告数据】：
+    【重要：这是你的长期记忆 - 用户的最新心理画像】：
     ${reportContext}
     
     【用户上传的历史档案】：
@@ -233,8 +321,8 @@ export const sendCounselingMessage = async (
     指导原则：
     1. **专业且温暖**：你了解警务工作的特殊性（高风险、高负荷、必须时刻保持警惕）。
     2. **解决方案导向**：不仅要倾听，还要提供可执行的减压技巧（如呼吸法、认知重构、睡眠建议）。
-    3. **隐私与信任**：强调对话的保密性，建立安全感。
-    4. 如果评估报告显示高风险，请温和地建议寻求线下专业医疗帮助，但不要惊吓用户。
+    3. **动态跟踪**：如果你感觉到用户的情绪有好转，请给予积极的反馈。
+    4. 隐私与信任：强调对话的保密性，建立安全感。
     5. 根据用户的具体困扰，结合CBT（认知行为疗法）或正念技术进行引导。
   `;
 

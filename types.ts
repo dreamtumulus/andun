@@ -20,6 +20,7 @@ export interface Recommendation {
 
 // Structured Report Data
 export interface AssessmentData {
+  lastUpdated: string; // ISO Date string for memory tracking
   summary: string;
   stressSources: StressSource[];
   psychologicalStatus: {
